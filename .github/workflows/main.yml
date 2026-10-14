@@ -1,0 +1,79 @@
+name: Linux SSH
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-ssh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Create SSH User with Fixed Credentials
+        run: |
+          # Set predefined username and secure password
+          USERNAME="shahin"
+          PASSWORD="Shahin@2026!"
+          
+          # Create a new user and set the password
+          sudo useradd -m -s /bin/bash $USERNAME
+          echo "$USERNAME:$PASSWORD" | sudo chpasswd
+          
+          # Grant sudo privileges
+          sudo usermod -aG sudo $USERNAME
+          
+          echo "User created successfully."
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+          sudo apt-get update
+          sudo apt-get install -y tailscale
+
+      - name: Establish Tailscale Connection
+        run: |
+          # Bring up Tailscale with the auth key and set a unique hostname
+          sudo tailscaled &
+          sleep 3
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-linux-runner-$GITHUB_RUN_ID
+          
+          # Wait for Tailscale to assign an IP
+          tsIP=""
+          retries=0
+          while [ -z "$tsIP" ] && [ $retries -lt 10 ]; do
+              tsIP=$(tailscale ip -4)
+              [ -z "$tsIP" ] && sleep 5
+              retries=$((retries+1))
+          done
+          
+          if [ -z "$tsIP" ]; then
+              echo "Error: Tailscale IP not assigned."
+              exit 1
+          fi
+          echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
+
+      - name: Verify SSH Accessibility
+        run: |
+          echo "Tailscale IP: $TAILSCALE_IP"
+          
+          # Test local SSH port 22 connectivity
+          if ! nc -z -w 5 localhost 22; then
+              echo "Error: SSH service is not running on port 22."
+              exit 1
+          fi
+          echo "SSH port 22 is active and ready!"
+
+      - name: Maintain Connection
+        run: |
+          echo -e "\n=== SSH ACCESS ==="
+          echo "Command: ssh shahin@$TAILSCALE_IP"
+          echo "Password: Shahin@2026!"
+          echo "==================\n"
+          
+          # Keep runner active indefinitely (or until manually cancelled)
+          while true; do
+              echo "[$(date)] Linux SSH Runner Active..."
+              sleep 300
+          done
+          
